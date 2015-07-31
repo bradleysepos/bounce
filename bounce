@@ -1,0 +1,227 @@
+#!/bin/bash
+# bounce - quickly restart applications, system services, and network interfaces
+#
+# Copyright 2015 Bradley Sepos
+# Released under the MIT License. See LICENSE for details.
+
+set -e
+set -u
+
+SELF="${0}"
+SELF_NAME=$(basename "${SELF}")
+HELP="\
+usage: ${SELF_NAME} [-hv]
+       ${SELF_NAME} service [...]
+where:
+   -h  display this help text
+   -v  display version information
+
+services (service/alias +include):
+    airport/wifi
+    ethernet/en0
+    en1
+    en2
+    en3
+    messages +notifyd
+    notifyd
+    powerd
+    spotlight/mds"
+VERSION="\
+bounce 0.1.0"
+
+# Logs error message and exits
+function exit_with_error {
+    ERROR="${2}"
+    echo "${SELF_NAME}: ${ERROR}" >&2 && syslog -s -l error "${SELF_NAME}: ${ERROR}"
+    PRINT_HELP="${3:-false}"
+    if [[ "${PRINT_HELP}" == true ]]; then
+        echo -e "${HELP}"
+    fi
+    exit "${1}"
+}
+
+# Exits on failed authentication
+function sudo_error {
+    SERVICE="${1}"
+    exit_with_error 1 "sudo required to restart service: ${SERVICE}"
+}
+
+# Prints a warning message when unable to restart a service
+function print_service_warn {
+    SERVICE="${1}"
+    echo "unable to restart service: ${SERVICE}"
+}
+
+# Restarts a given service, using multiple methods if necessary
+# Requires 2 arguments: process name, launchctl subcommand (e.g. system/com.apple.foobar)
+function private_bounce_service {
+    PROCESS="${1}"
+    SERVICE="${2}"
+    function get_pid {
+        ps -e | grep -i "${PROCESS}" | grep -v 'grep' | awk '{ print $1 }' | head -n 1
+    }
+    PID_A=$(get_pid)
+    # launchctl method
+    if sudo launchctl kickstart -k "${SERVICE}" && sleep 2; then
+        PID_B=$(get_pid)
+        if [[ "${PID_A}" != "${PID_B}" ]]; then
+            # nice daemon
+            return 0
+        fi
+        # force kill
+        if sudo killall -9 "${PROCESS}" && sleep 5; then
+            PID_B=$(get_pid)
+            if [[ "${PID_A}" != "${PID_B}" ]]; then
+                # restarted itself
+                return 0
+            fi
+            # launchctl method again (no kill)
+            if sudo launchctl kickstart "${SERVICE}" && sleep 2; then
+                PID_B=$(get_pid)
+                if [[ "${PID_A}" != "${PID_B}" ]]; then
+                    # just needed a nudge or three
+                    return 0
+                fi
+            fi
+        fi
+    fi
+    return 1
+}
+
+# Restarts network interfaces
+# Requires 1 argument: network interface name (e.g. en0)
+function private_bounce_interface {
+    INTERFACE="${1}"
+    sudo -v || sudo_error "${INTERFACE}"
+    if sudo ifconfig "${INTERFACE}" down && sleep 2 && sudo ifconfig "${INTERFACE}" up; then
+        return 0
+    fi
+    print_service_warn "${1}"
+    return 1
+}
+function bounce_ethernet {
+    private_bounce_interface en0
+}
+function bounce_en0 {
+    private_bounce_interface en0
+}
+function bounce_en1 {
+    private_bounce_interface en1
+}
+function bounce_en2 {
+    private_bounce_interface en2
+}
+function bounce_en3 {
+    private_bounce_interface en3
+}
+function bounce_airport {
+    if networksetup -setairportpower foobarbaz off >/dev/null 2>&1 && sleep 2 && networksetup -setairportpower foobarbaz on >/dev/null 2>&1; then
+        return 0
+    fi
+    print_service_warn "airport/wifi"
+    return 1
+}
+function bounce_wifi {
+    bounce_airport
+}
+
+# Restarts notifyd
+function bounce_notifyd {
+    sudo -v || sudo_error "notifyd"
+    if private_bounce_service "notifyd" "system/com.apple.notifyd"; then
+        return 0
+    fi
+    print_service_warn "notifyd"
+    return 1
+}
+
+# Restarts Messages and notifyd
+function bounce_messages {
+    sudo -v || sudo_error "messages"
+    killall Messages >/dev/null 2>&1
+    if bounce_notifyd && sleep 2 && open -g /Applications/Messages.app; then
+        return 0
+    fi
+    print_service_warn "messages"
+    return 1
+}
+
+# Restarts powerd
+function bounce_powerd {
+    sudo -v || sudo_error "powerd"
+    if private_bounce_service "powerd" "system/com.apple.powerd"; then
+        return 0
+    fi
+    print_service_warn "powerd"
+    return 1
+}
+
+# Restarts Spotlight
+function bounce_spotlight {
+    sudo -v || sudo_error "spotlight/mds"
+    if sudo killall mdworker && sleep 1 && sudo killall -9 mds mds_stores mdworker && sleep 5 && sudo launchctl kickstart system/com.apple.metadata.mds; then
+        return 0
+    fi
+    print_service_warn "spotlight/mds"
+    return 1
+}
+function bounce_mds {
+    bounce_spotlight
+}
+
+# Arguments
+OPTIND=1
+while getopts ":hv" OPT; do
+    case "${OPT}" in
+        h)
+            # Print help and exit
+            echo -e "${HELP}"
+            exit 0
+            ;;
+        v)
+            # Print version and exit
+            echo -e "${VERSION}"
+            exit 0
+            ;;
+        :)
+            # Option without required argument
+            exit_with_error 1 "option -${OPTARG} requires a value" true
+            ;;
+        \?)
+            # Invalid option specified
+            exit_with_error 1 "invalid option: -${OPTARG}" true
+            ;;
+    esac
+done
+shift $((${OPTIND} - 1))
+
+# Internal vars
+SERVICES=()
+SERVICE_FOUND=false
+SERVICE_SUCCESS=false
+
+# Handle arguments
+if [[ "$#" -gt 0 ]]; then
+    SERVICES=("$@")
+else
+    exit_with_error 1 "argument(s) required" true
+fi
+
+# Restarts services
+for T in ${SERVICES[@]}; do
+    SERVICE=$(echo "${T}" | awk '{ print tolower($0) }')
+    if [[ $(type -t bounce_${SERVICE}) == "function" ]]; then
+        if bounce_${SERVICE}; then
+            SERVICE_SUCCESS=true
+        fi
+        SERVICE_FOUND=true
+    fi
+done
+
+# If any service succeeds, consider the operation a success
+if [[ "${SERVICE_FOUND}" == false ]]; then
+    exit_with_error 1 "unable to find any matching services"
+elif [[ "${SERVICE_SUCCESS}" == false ]]; then
+    exit_with_error 1 "unable to restart any services"
+fi
+exit 0
