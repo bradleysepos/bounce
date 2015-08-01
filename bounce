@@ -4,6 +4,9 @@
 # Copyright 2015 Bradley Sepos
 # Released under the MIT License. See LICENSE for details.
 
+NAME="bounce"
+VERSION="0.1.0"
+
 set -e
 set -u
 
@@ -26,8 +29,6 @@ services (service/alias +include):
     notifyd
     powerd
     spotlight/mds"
-VERSION="\
-bounce 0.1.0"
 
 # Logs error message and exits
 function exit_with_error {
@@ -180,7 +181,7 @@ while getopts ":hv" OPT; do
             ;;
         v)
             # Print version and exit
-            echo -e "${VERSION}"
+            echo "${NAME} ${VERSION}"
             exit 0
             ;;
         :)
