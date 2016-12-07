@@ -21,6 +21,9 @@ where:
 
 services (service/alias +include):
     airport/wifi
+    appleeventsd
+    bonjour/mdnsresponder
+    clipboard/pboard
     ethernet/en0
     en1
     en2
@@ -28,6 +31,7 @@ services (service/alias +include):
     messages +notifyd
     notifyd
     powerd
+    sharingd
     spotlight/mds"
 
 # Logs error message and exits
@@ -126,6 +130,42 @@ function bounce_wifi {
     bounce_airport
 }
 
+# Restarts appleeventsd
+function bounce_appleeventsd {
+    sudo -v || sudo_error "appleeventsd"
+    if private_bounce_service "appleeventsd" "system/com.apple.coreservices.appleevents"; then
+        return 0
+    fi
+    print_service_warn "appleeventsd"
+    return 1
+}
+
+# Restarts mDNSResponder and mDNSResponderHelper
+function bounce_bonjour {
+    sudo -v || sudo_error "bonjour/mdnsresponder"
+    if private_bounce_service "mDNSResponderHelper" "system/com.apple.mDNSResponderHelper" && private_bounce_service "mDNSResponder" "system/com.apple.mDNSResponder"; then
+        return 0
+    fi
+    print_service_warn "bonjour/mdnsresponder"
+    return 1
+}
+function bounce_mdnsresponder {
+    bounce_bonjour
+}
+
+# Restarts pboard and pbs
+function bounce_clipboard {
+    sudo -v || sudo_error "clipboard/pboard"
+    if private_bounce_service "pbs" "gui/$(id -u)/com.apple.pbs" && private_bounce_service "pboard" "gui/$(id -u)/com.apple.pboard"; then
+        return 0
+    fi
+    print_service_warn "clipboard/pboard"
+    return 1
+}
+function bounce_pboard {
+    bounce_clipboard
+}
+
 # Restarts notifyd
 function bounce_notifyd {
     sudo -v || sudo_error "notifyd"
@@ -154,6 +194,16 @@ function bounce_powerd {
         return 0
     fi
     print_service_warn "powerd"
+    return 1
+}
+
+# Restarts sharingd
+function bounce_sharingd {
+    sudo -v || sudo_error "sharingd"
+    if private_bounce_service "sharingd" "gui/$(id -u)/com.apple.sharingd"; then
+        return 0
+    fi
+    print_service_warn "sharingd"
     return 1
 }
 
